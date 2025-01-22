@@ -136,7 +136,8 @@ class InventoryManager:
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.log_text.yview)
-            def select_inventory(self):
+    
+    def select_inventory(self):
         filename = filedialog.askopenfilename(
             title="选择库存文件",
             filetypes=[("Excel files", "*.xlsx *.xls")]
