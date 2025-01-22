@@ -28,7 +28,7 @@ jobs:
 
     - name: Build EXE
       run: |
-        pyinstaller --noconfirm --onefile --windowed --icon=assets/icon.ico --add-data "assets;assets" --name "库存管理系统" src/inventory_manager.py
+        pyinstaller --noconfirm --onefile --windowed --name "库存管理系统" src/inventory_manager.py
 
     - name: Upload artifact
       uses: actions/upload-artifact@v3
