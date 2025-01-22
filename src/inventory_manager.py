@@ -20,10 +20,6 @@ class InventoryManager:
         
         self.setup_ui()
         
-        # 绑定文件拖放事件
-        self.root.drop_target_register(tk.DND_FILES)
-        self.root.dnd_bind('<<Drop>>', self.on_drop)
-        
     def setup_ui(self):
         # 主容器
         main_frame = ttk.Frame(self.root, padding="20")
@@ -118,18 +114,6 @@ class InventoryManager:
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.log_text.yview)
-        
-    def on_drop(self, event):
-        file_path = event.data
-        if file_path.endswith(('.xlsx', '.xls')):
-            # 根据当前焦点决定更新哪个文件路径
-            focused = self.root.focus_get()
-            if focused == self.inventory_entry:
-                self.inventory_file.set(file_path)
-                self.log("已选择库存文件: " + file_path)
-            elif focused == self.operation_entry:
-                self.operation_file.set(file_path)
-                self.log("已选择出入库文件: " + file_path)
     
     def select_inventory(self):
         filename = filedialog.askopenfilename(
