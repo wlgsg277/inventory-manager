@@ -136,8 +136,7 @@ class InventoryManager:
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.log_text.yview)
-    
-    def select_inventory(self):
+            def select_inventory(self):
         filename = filedialog.askopenfilename(
             title="选择库存文件",
             filetypes=[("Excel files", "*.xlsx *.xls")]
@@ -199,58 +198,34 @@ class InventoryManager:
                 try:
                     df_operation = pd.read_excel(operation_file)
                     
-                    # 判断是出库还是入库并获取日期
+                    # 判断是出库还是入库
                     is_outbound = '出库单号' in df_operation.columns
                     operation_type = "出库" if is_outbound else "入库"
                     
-                    try:
-                        if is_outbound:
-                            if '出库日期' not in df_operation.columns:
-                                self.log("错误: 出库表中未找到'出库日期'列")
-                                continue
-                            date_str = pd.to_datetime(df_operation['出库日期'].iloc[0])
-                        else:
-                            if '创建日期' not in df_operation.columns:
-                                self.log("错误: 入库表中未找到'创建日期'列")
-                                continue
-                            date_str = pd.to_datetime(df_operation['创建日期'].iloc[0])
-                        
-                        day = date_str.day
-                        self.log(f"处理{date_str.strftime('%Y-%m-%d')}的{operation_type}数据")
-                        
-                    except Exception as e:
-                        self.log(f"错误: 处理日期时出错 - {str(e)}")
+                    # 获取日期列名
+                    date_column = '出库日期' if is_outbound else '创建日期'
+                    
+                    if date_column not in df_operation.columns:
+                        self.log(f"错误: {operation_type}表中未找到'{date_column}'列")
                         continue
-
-                    # 汇总数量
+                    
+                    # 转换日期列为datetime类型
+                    df_operation[date_column] = pd.to_datetime(df_operation[date_column])
+                    
+                    # 按日期和商品编码分组汇总
                     try:
                         if is_outbound:
-                            df_sum = df_operation.groupby('商品编码')['数量'].sum().reset_index()
+                            df_sum = df_operation.groupby([date_column, '商品编码'])['数量'].sum().reset_index()
                         else:
-                            df_sum = df_operation.groupby('商品编码')['调拨数量'].sum().reset_index()
+                            df_sum = df_operation.groupby([date_column, '商品编码'])['调拨数量'].sum().reset_index()
                             df_sum = df_sum.rename(columns={'调拨数量': '数量'})
                     except Exception as e:
                         self.log(f"错误: 汇总数量时出错 - {str(e)}")
                         continue
 
-                    # 获取列名和位置
-                    column_name = f"{day}日{'出' if is_outbound else '进'}库"
-                    
-                    # 获取列的位置
-                    header_row = 1
-                    column_index = None
-                    for idx, cell in enumerate(ws[header_row], 1):
-                        if cell.value == column_name:
-                            column_index = idx
-                            break
-
-                    if column_index is None:
-                        self.log(f"错误: 未找到列 '{column_name}'")
-                        continue
-
                     # 获取新商品编码列的位置
                     code_column_index = None
-                    for idx, cell in enumerate(ws[header_row], 1):
+                    for idx, cell in enumerate(ws[1], 1):
                         if cell.value == '新商品编码':
                             code_column_index = idx
                             break
@@ -259,32 +234,48 @@ class InventoryManager:
                         self.log("错误: 未找到'新商品编码'列")
                         continue
 
-                    updated_count = 0
-                    not_found_count = 0
-
-                    # 更新数据
-                    for _, row in df_sum.iterrows():
-                        code = str(row['商品编码']).strip()
-                        quantity = row['数量']
+                    # 按日期处理数据
+                    for date, group in df_sum.groupby(date_column):
+                        day = date.day
+                        column_name = f"{day}日{'出' if is_outbound else '进'}库"
                         
-                        found = False
-                        for idx, cell in enumerate(ws[get_column_letter(code_column_index)], 1):
-                            if str(cell.value).strip() == code:
-                                ws[f"{get_column_letter(column_index)}{idx}"] = quantity
-                                found = True
-                                updated_count += 1
-                                self.log(f"更新编码 {code} 的{operation_type}数量: {quantity}")
+                        # 获取列的位置
+                        column_index = None
+                        for idx, cell in enumerate(ws[1], 1):
+                            if cell.value == column_name:
+                                column_index = idx
                                 break
 
-                        if not found:
-                            not_found_count += 1
-                            self.log(f"警告: 未找到编码 {code} 的商品")
+                        if column_index is None:
+                            self.log(f"错误: 未找到列 '{column_name}'")
+                            continue
 
-                    # 显示当前文件的更新结果
-                    result = f"\n文件处理完成！\n成功更新: {updated_count} 条记录"
-                    if not_found_count > 0:
-                        result += f"\n未找到商品: {not_found_count} 条记录"
-                    self.log(result)
+                        updated_count = 0
+                        not_found_count = 0
+
+                        # 更新数据
+                        for _, row in group.iterrows():
+                            code = str(row['商品编码']).strip()
+                            quantity = row['数量']
+                            
+                            found = False
+                            for idx, cell in enumerate(ws[get_column_letter(code_column_index)], 1):
+                                if str(cell.value).strip() == code:
+                                    ws[f"{get_column_letter(column_index)}{idx}"] = quantity
+                                    found = True
+                                    updated_count += 1
+                                    self.log(f"更新编码 {code} 的{date.strftime('%Y-%m-%d')} {operation_type}数量: {quantity}")
+                                    break
+
+                            if not found:
+                                not_found_count += 1
+                                self.log(f"警告: 未找到编码 {code} 的商品")
+
+                        # 显示当前日期的更新结果
+                        result = f"\n{date.strftime('%Y-%m-%d')}处理完成！\n成功更新: {updated_count} 条记录"
+                        if not_found_count > 0:
+                            result += f"\n未找到商品: {not_found_count} 条记录"
+                        self.log(result)
 
                 except Exception as e:
                     self.log(f"处理文件 {operation_file} 时出错: {str(e)}")
