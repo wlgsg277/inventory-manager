@@ -214,8 +214,8 @@ class InventoryManager:
             df_header = pd.read_excel(self.inventory_file.get(), sheet_name=self.sheet_combobox.get(), nrows=1)
             code_column_idx = df_header.columns.get_loc('新商品编码') + 1
             
-            # 加载工作簿
-            wb = load_workbook(self.inventory_file.get(), read_only=False, data_only=True)
+            # 加载工作簿，保留公式
+            wb = load_workbook(self.inventory_file.get(), read_only=False, data_only=False)
             ws = wb[self.sheet_combobox.get()]
             
             # 建立商品编码索引
@@ -299,11 +299,12 @@ class InventoryManager:
                     continue
 
             if not self._cancel_operation:
-                # 批量应用所有更新
+                # 批量应用所有更新，保留公式和格式
                 self.log("\n正在更新单元格...")
                 for column_name, (column_letter, updates) in all_updates.items():
                     for row_idx, value in updates.items():
-                        ws[f"{column_letter}{row_idx}"] = value
+                        cell = ws[f"{column_letter}{row_idx}"]
+                        cell.value = value  # 只更新值，保留公式和格式
                 
                 # 保存更新后的库存表
                 try:
