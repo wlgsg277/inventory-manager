@@ -14,12 +14,10 @@ class InventoryManager:
         self.style = Style(theme='cosmo')
         
         self.root.title("库存管理系统")
-        self.root.geometry("800x600")
+        self.root.geometry("1000x800")
         
         # 设置变量
         self.inventory_file = tk.StringVar()
-        self.operation_file = tk.StringVar()
-        self.selected_date = tk.StringVar()
         
         self.setup_ui()
         
@@ -71,38 +69,47 @@ class InventoryManager:
         )
         self.sheet_combobox.pack(side=tk.LEFT, padx=5)
         
-        # 日期选择
-        date_frame = ttk.Frame(files_frame)
-        date_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(date_frame, text="选择日期:").pack(side=tk.LEFT)
-        dates = [str(i) for i in range(1, 32)]
-        date_combo = ttk.Combobox(
-            date_frame, 
-            textvariable=self.selected_date,
-            values=dates,
-            width=10
-        )
-        date_combo.pack(side=tk.LEFT, padx=5)
-        
         # 出入库文件选择
         operation_frame = ttk.Frame(files_frame)
         operation_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(operation_frame, text="出入库文件:").pack(side=tk.LEFT)
-        self.operation_entry = ttk.Entry(
-            operation_frame, 
-            textvariable=self.operation_file,
-            width=50
-        )
-        self.operation_entry.pack(side=tk.LEFT, padx=5)
+        
+        # 使用Listbox显示选择的文件
+        self.files_listbox = tk.Listbox(operation_frame, height=5, width=50)
+        self.files_listbox.pack(side=tk.LEFT, padx=5)
+        
+        # 添加文件列表的滚动条
+        files_scrollbar = ttk.Scrollbar(operation_frame)
+        files_scrollbar.pack(side=tk.LEFT, fill=tk.Y)
+        
+        self.files_listbox.config(yscrollcommand=files_scrollbar.set)
+        files_scrollbar.config(command=self.files_listbox.yview)
+        
+        # 文件操作按钮框架
+        file_buttons_frame = ttk.Frame(operation_frame)
+        file_buttons_frame.pack(side=tk.LEFT, padx=5)
         
         ttk.Button(
-            operation_frame, 
-            text="浏览",
+            file_buttons_frame,
+            text="添加文件",
             style='info.TButton',
-            command=self.select_operation
-        ).pack(side=tk.LEFT)
+            command=self.add_operation_files
+        ).pack(pady=2)
+        
+        ttk.Button(
+            file_buttons_frame,
+            text="清除所选",
+            style='danger.TButton',
+            command=self.remove_selected_files
+        ).pack(pady=2)
+        
+        ttk.Button(
+            file_buttons_frame,
+            text="清除全部",
+            style='danger.TButton',
+            command=self.clear_all_files
+        ).pack(pady=2)
         
         # 更新按钮
         ttk.Button(
@@ -147,14 +154,23 @@ class InventoryManager:
             except Exception as e:
                 self.log(f"读取工作表列表时出错: {str(e)}")
     
-    def select_operation(self):
-        filename = filedialog.askopenfilename(
+    def add_operation_files(self):
+        filenames = filedialog.askopenfilenames(
             title="选择出入库文件",
             filetypes=[("Excel files", "*.xlsx *.xls")]
         )
-        if filename:
-            self.operation_file.set(filename)
-            self.log("已选择出入库文件: " + filename)
+        if filenames:
+            for filename in filenames:
+                self.files_listbox.insert(tk.END, filename)
+                self.log("已添加文件: " + filename)
+    
+    def remove_selected_files(self):
+        selection = self.files_listbox.curselection()
+        for index in reversed(selection):
+            self.files_listbox.delete(index)
+    
+    def clear_all_files(self):
+        self.files_listbox.delete(0, tk.END)
     
     def log(self, message):
         self.log_text.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {message}\n")
@@ -162,8 +178,12 @@ class InventoryManager:
     
     def update_inventory(self):
         try:
-            if not all([self.inventory_file.get(), self.operation_file.get(), self.selected_date.get(), self.sheet_combobox.get()]):
-                self.log("错误: 请选择所有必要的文件、日期和工作表")
+            if not all([self.inventory_file.get(), self.sheet_combobox.get()]):
+                self.log("错误: 请选择库存文件和工作表")
+                return
+                
+            if self.files_listbox.size() == 0:
+                self.log("错误: 请添加出入库文件")
                 return
 
             # 使用openpyxl读取Excel，保持格式
@@ -171,89 +191,112 @@ class InventoryManager:
             selected_sheet = self.sheet_combobox.get()
             ws = wb[selected_sheet]
 
-            # 读取数据进行处理
-            df_inventory = pd.read_excel(self.inventory_file.get(), sheet_name=selected_sheet)
-            df_operation = pd.read_excel(self.operation_file.get())
-
-            # 判断是出库还是入库
-            is_outbound = '出库单号' in df_operation.columns
-            operation_type = "出库" if is_outbound else "入库"
-
-            # 汇总数量
-            try:
-                if is_outbound:
-                    df_sum = df_operation.groupby('商品编码')['数量'].sum().reset_index()
-                else:
-                    df_sum = df_operation.groupby('商品编码')['调拨数量'].sum().reset_index()
-                    df_sum = df_sum.rename(columns={'调拨数量': '数量'})
-            except Exception as e:
-                self.log(f"错误: 汇总数量时出错 - {str(e)}")
-                return
-
-            # 获取列索引
-            day = int(self.selected_date.get())
-            column_name = f"{day}日{'出' if is_outbound else '进'}库"
-            
-            # 获取列的位置
-            header_row = 1  # 假设表头在第1行
-            column_index = None
-            for idx, cell in enumerate(ws[header_row], 1):
-                if cell.value == column_name:
-                    column_index = idx
-                    break
-
-            if column_index is None:
-                self.log(f"错误: 未找到列 '{column_name}'")
-                return
-
-            # 获取新商品编码列的位置
-            code_column_index = None
-            for idx, cell in enumerate(ws[header_row], 1):
-                if cell.value == '新商品编码':
-                    code_column_index = idx
-                    break
-
-            if code_column_index is None:
-                self.log("错误: 未找到'新商品编码'列")
-                return
-
-            updated_count = 0
-            not_found_count = 0
-
-            # 更新数据
-            for _, row in df_sum.iterrows():
-                code = str(row['商品编码']).strip()
-                quantity = row['数量']
+            # 处理每个出入库文件
+            for i in range(self.files_listbox.size()):
+                operation_file = self.files_listbox.get(i)
+                self.log(f"\n开始处理文件: {os.path.basename(operation_file)}")
                 
-                # 在工作表中查找匹配的编码
-                found = False
-                for idx, cell in enumerate(ws[get_column_letter(code_column_index)], 1):
-                    if str(cell.value).strip() == code:
-                        # 更新对应的出入库数量
-                        ws[f"{get_column_letter(column_index)}{idx}"] = quantity
-                        found = True
-                        updated_count += 1
-                        self.log(f"更新编码 {code} 的{operation_type}数量: {quantity}")
-                        break
+                try:
+                    df_operation = pd.read_excel(operation_file)
+                    
+                    # 判断是出库还是入库并获取日期
+                    is_outbound = '出库单号' in df_operation.columns
+                    operation_type = "出库" if is_outbound else "入库"
+                    
+                    try:
+                        if is_outbound:
+                            if '出库日期' not in df_operation.columns:
+                                self.log("错误: 出库表中未找到'出库日期'列")
+                                continue
+                            date_str = pd.to_datetime(df_operation['出库日期'].iloc[0])
+                        else:
+                            if '创建日期' not in df_operation.columns:
+                                self.log("错误: 入库表中未找到'创建日期'列")
+                                continue
+                            date_str = pd.to_datetime(df_operation['创建日期'].iloc[0])
+                        
+                        day = date_str.day
+                        self.log(f"处理{date_str.strftime('%Y-%m-%d')}的{operation_type}数据")
+                        
+                    except Exception as e:
+                        self.log(f"错误: 处理日期时出错 - {str(e)}")
+                        continue
 
-                if not found:
-                    not_found_count += 1
-                    self.log(f"警告: 未找到编码 {code} 的商品")
+                    # 汇总数量
+                    try:
+                        if is_outbound:
+                            df_sum = df_operation.groupby('商品编码')['数量'].sum().reset_index()
+                        else:
+                            df_sum = df_operation.groupby('商品编码')['调拨数量'].sum().reset_index()
+                            df_sum = df_sum.rename(columns={'调拨数量': '数量'})
+                    except Exception as e:
+                        self.log(f"错误: 汇总数量时出错 - {str(e)}")
+                        continue
 
-            # 保存文件
+                    # 获取列名和位置
+                    column_name = f"{day}日{'出' if is_outbound else '进'}库"
+                    
+                    # 获取列的位置
+                    header_row = 1
+                    column_index = None
+                    for idx, cell in enumerate(ws[header_row], 1):
+                        if cell.value == column_name:
+                            column_index = idx
+                            break
+
+                    if column_index is None:
+                        self.log(f"错误: 未找到列 '{column_name}'")
+                        continue
+
+                    # 获取新商品编码列的位置
+                    code_column_index = None
+                    for idx, cell in enumerate(ws[header_row], 1):
+                        if cell.value == '新商品编码':
+                            code_column_index = idx
+                            break
+
+                    if code_column_index is None:
+                        self.log("错误: 未找到'新商品编码'列")
+                        continue
+
+                    updated_count = 0
+                    not_found_count = 0
+
+                    # 更新数据
+                    for _, row in df_sum.iterrows():
+                        code = str(row['商品编码']).strip()
+                        quantity = row['数量']
+                        
+                        found = False
+                        for idx, cell in enumerate(ws[get_column_letter(code_column_index)], 1):
+                            if str(cell.value).strip() == code:
+                                ws[f"{get_column_letter(column_index)}{idx}"] = quantity
+                                found = True
+                                updated_count += 1
+                                self.log(f"更新编码 {code} 的{operation_type}数量: {quantity}")
+                                break
+
+                        if not found:
+                            not_found_count += 1
+                            self.log(f"警告: 未找到编码 {code} 的商品")
+
+                    # 显示当前文件的更新结果
+                    result = f"\n文件处理完成！\n成功更新: {updated_count} 条记录"
+                    if not_found_count > 0:
+                        result += f"\n未找到商品: {not_found_count} 条记录"
+                    self.log(result)
+
+                except Exception as e:
+                    self.log(f"处理文件 {operation_file} 时出错: {str(e)}")
+                    continue
+
+            # 保存更新后的库存表
             try:
                 wb.save(self.inventory_file.get())
                 self.log("\n已保存更新后的库存表")
             except Exception as e:
                 self.log(f"错误: 保存文件时出错 - {str(e)}")
                 return
-
-            # 显示更新结果
-            result = f"\n更新完成！\n成功更新: {updated_count} 条记录"
-            if not_found_count > 0:
-                result += f"\n未找到商品: {not_found_count} 条记录"
-
-            self.log(result)
 
         except Exception as e:
             self.log(f"错误: {str(e)}\n")
