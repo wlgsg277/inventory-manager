@@ -4,6 +4,7 @@ from ttkbootstrap import Style
 import pandas as pd
 import os
 from datetime import datetime
+import traceback
 
 class InventoryManager:
     def __init__(self):
@@ -147,26 +148,57 @@ class InventoryManager:
             df_inventory = pd.read_excel(self.inventory_file.get())
             df_operation = pd.read_excel(self.operation_file.get())
             
+            # 显示列名和数据类型
+            self.log("\n库存表格信息:")
+            self.log(f"列名: {list(df_inventory.columns)}")
+            self.log(f"数据类型: {df_inventory.dtypes}")
+            
+            self.log("\n出入库表格信息:")
+            self.log(f"列名: {list(df_operation.columns)}")
+            self.log(f"数据类型: {df_operation.dtypes}")
+            
+            # 检查列名中的空格和特殊字符
+            inventory_cols = [f"'{col}' (长度:{len(col)})" for col in df_inventory.columns]
+            self.log("\n库存表格列名详情:")
+            for col in inventory_cols:
+                self.log(col)
+            
             # 判断是出库还是入库
             is_outbound = '出库单号' in df_operation.columns
             operation_type = "出库" if is_outbound else "入库"
             
             # 汇总数量
-            if is_outbound:
-                df_sum = df_operation.groupby('商品编码')['数量'].sum().reset_index()
-            else:
-                df_sum = df_operation.groupby('商品编码')['调拨数量'].sum().reset_index()
-                df_sum = df_sum.rename(columns={'调拨数量': '数量'})
+            try:
+                if is_outbound:
+                    df_sum = df_operation.groupby('商品编码')['数量'].sum().reset_index()
+                else:
+                    df_sum = df_operation.groupby('商品编码')['调拨数量'].sum().reset_index()
+                    df_sum = df_sum.rename(columns={'调拨数量': '数量'})
+            except Exception as e:
+                self.log(f"错误: 汇总数量时出错 - {str(e)}")
+                return
             
             # 更新库存
             day = int(self.selected_date.get())
             column_name = f"{day}日{'出' if is_outbound else '进'}库"
+            
+            # 检查日期列是否存在，如果不存在则创建
+            if column_name not in df_inventory.columns:
+                df_inventory[column_name] = 0
+                self.log(f"创建新列: {column_name}")
+            
             updated_count = 0
             not_found_count = 0
             
+            # 显示更新进度
+            self.log(f"\n开始更新{operation_type}数据...")
+            
+            # 尝试不同的编码匹配方式
             for _, row in df_sum.iterrows():
-                code = str(row['商品编码'])
-                mask = df_inventory['新商品编码'] == code
+                code = str(row['商品编码']).strip()  # 去除可能的空格
+                # 尝试多种匹配方式
+                mask = (df_inventory['新商品编码'].astype(str).str.strip() == code)
+                
                 if mask.any():
                     df_inventory.loc[mask, column_name] = row['数量']
                     updated_count += 1
@@ -176,17 +208,24 @@ class InventoryManager:
                     self.log(f"警告: 未找到编码 {code} 的商品")
             
             # 保存更新后的库存表
-            df_inventory.to_excel(self.inventory_file.get(), index=False)
+            try:
+                df_inventory.to_excel(self.inventory_file.get(), index=False)
+                self.log("\n已保存更新后的库存表")
+            except Exception as e:
+                self.log(f"错误: 保存文件时出错 - {str(e)}")
+                return
             
             # 显示更新结果
-            result = f"更新完成！\n成功更新: {updated_count} 条记录"
+            result = f"\n更新完成！\n成功更新: {updated_count} 条记录"
             if not_found_count > 0:
                 result += f"\n未找到商品: {not_found_count} 条记录"
             
             self.log(result)
             
         except Exception as e:
-            self.log(f"错误: {str(e)}")
+            self.log(f"错误: {str(e)}\n")
+            # 打印详细的错误信息
+            self.log(traceback.format_exc())
     
     def run(self):
         self.root.mainloop()
