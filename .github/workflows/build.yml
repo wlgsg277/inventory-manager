@@ -21,19 +21,16 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pandas
-        pip install openpyxl
-        pip install ttkbootstrap
+        pip install -r requirements.txt
         pip install pyinstaller
     
     - name: Build executable
       run: |
-        cd src
         pyinstaller --clean -F --noconsole --hidden-import ttkbootstrap inventory_manager.py
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: inventory-manager
-        path: src/dist/inventory_manager.exe
+        path: dist/inventory_manager.exe
         retention-days: 5
