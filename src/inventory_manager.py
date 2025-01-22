@@ -4,12 +4,10 @@ from ttkbootstrap import Style
 import pandas as pd
 import os
 from datetime import datetime
-from tkinterdnd2 import DND_FILES, TkinterDnD
-import json
 
 class InventoryManager:
     def __init__(self):
-        self.root = TkinterDnD.Tk()
+        self.root = tk.Tk()
         self.style = Style(theme='cosmo')
         
         self.root.title("库存管理系统")
@@ -21,6 +19,10 @@ class InventoryManager:
         self.selected_date = tk.StringVar()
         
         self.setup_ui()
+        
+        # 绑定文件拖放事件
+        self.root.drop_target_register(tk.DND_FILES)
+        self.root.dnd_bind('<<Drop>>', self.on_drop)
         
     def setup_ui(self):
         # 主容器
@@ -44,16 +46,12 @@ class InventoryManager:
         inventory_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(inventory_frame, text="库存文件:").pack(side=tk.LEFT)
-        inventory_entry = ttk.Entry(
+        self.inventory_entry = ttk.Entry(
             inventory_frame, 
             textvariable=self.inventory_file,
             width=50
         )
-        inventory_entry.pack(side=tk.LEFT, padx=5)
-        
-        # 设置拖拽功能
-        inventory_entry.drop_target_register(DND_FILES)
-        inventory_entry.dnd_bind('<<Drop>>', self.drop_inventory)
+        self.inventory_entry.pack(side=tk.LEFT, padx=5)
         
         ttk.Button(
             inventory_frame, 
@@ -81,16 +79,12 @@ class InventoryManager:
         operation_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(operation_frame, text="出入库文件:").pack(side=tk.LEFT)
-        operation_entry = ttk.Entry(
+        self.operation_entry = ttk.Entry(
             operation_frame, 
             textvariable=self.operation_file,
             width=50
         )
-        operation_entry.pack(side=tk.LEFT, padx=5)
-        
-        # 设置拖拽功能
-        operation_entry.drop_target_register(DND_FILES)
-        operation_entry.dnd_bind('<<Drop>>', self.drop_operation)
+        self.operation_entry.pack(side=tk.LEFT, padx=5)
         
         ttk.Button(
             operation_frame, 
@@ -125,17 +119,17 @@ class InventoryManager:
         self.log_text.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.log_text.yview)
         
-    def drop_inventory(self, event):
+    def on_drop(self, event):
         file_path = event.data
         if file_path.endswith(('.xlsx', '.xls')):
-            self.inventory_file.set(file_path.strip('{}'))
-            self.log("已选择库存文件: " + file_path)
-    
-    def drop_operation(self, event):
-        file_path = event.data
-        if file_path.endswith(('.xlsx', '.xls')):
-            self.operation_file.set(file_path.strip('{}'))
-            self.log("已选择出入库文件: " + file_path)
+            # 根据当前焦点决定更新哪个文件路径
+            focused = self.root.focus_get()
+            if focused == self.inventory_entry:
+                self.inventory_file.set(file_path)
+                self.log("已选择库存文件: " + file_path)
+            elif focused == self.operation_entry:
+                self.operation_file.set(file_path)
+                self.log("已选择出入库文件: " + file_path)
     
     def select_inventory(self):
         filename = filedialog.askopenfilename(
