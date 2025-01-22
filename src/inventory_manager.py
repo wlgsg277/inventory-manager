@@ -190,7 +190,7 @@ class InventoryManager:
             progress_window = tk.Toplevel(self.root)
             progress_window.title("处理进度")
             progress_window.geometry("300x150")
-            progress_window.transient(self.root)  # 设置为主窗口的子窗口
+            progress_window.transient(self.root)
             
             progress_label = ttk.Label(progress_window, text="正在处理...")
             progress_label.pack(pady=10)
@@ -202,7 +202,6 @@ class InventoryManager:
             )
             progress_bar.pack(pady=10)
             
-            # 添加取消按钮
             cancel_button = ttk.Button(
                 progress_window,
                 text="取消",
@@ -218,7 +217,7 @@ class InventoryManager:
             # 找到所需列的索引
             code_column_idx = df_header.columns.get_loc('新商品编码') + 1
             
-            # 使用openpyxl加载工作簿，只读模式提高性能
+            # 使用openpyxl加载工作簿
             wb = load_workbook(self.inventory_file.get(), read_only=False, data_only=True)
             ws = wb[self.sheet_combobox.get()]
             
@@ -227,13 +226,12 @@ class InventoryManager:
             code_index_map = {}
             code_column_letter = get_column_letter(code_column_idx)
             
-            # 优化：使用生成器减少内存使用
             for idx, row in enumerate(ws.iter_rows(min_col=code_column_idx, max_col=code_column_idx, min_row=2), 2):
                 if row[0].value:
                     code_index_map[str(row[0].value).strip()] = idx
 
             total_files = self.files_listbox.size()
-            progress_bar['maximum'] = total_files * 100  # 更精细的进度显示
+            progress_bar['maximum'] = total_files * 100
             
             # 预处理：收集所有更新
             all_updates = {}
@@ -250,49 +248,46 @@ class InventoryManager:
                 self.log(f"\n开始处理文件: {file_name}")
                 
                 try:
-                    # 优化：使用更大的chunk size
-                    chunks = pd.read_excel(operation_file, chunksize=5000)
-                    chunk_count = 0
+                    # 一次性读取文件，但只读取必要的列
+                    df = pd.read_excel(
+                        operation_file,
+                        usecols=lambda x: x in ['出库单号', '商品编码', '数量', '出库日期', '创建日期', '调拨数量']
+                    )
                     
-                    for chunk in chunks:
-                        if self._cancel_operation:
-                            break
+                    is_outbound = '出库单号' in df.columns
+                    operation_type = "出库" if is_outbound else "入库"
+                    date_column = '出库日期' if is_outbound else '创建日期'
+                    
+                    if date_column not in df.columns:
+                        continue
+                    
+                    # 优化：减少日期转换开销
+                    df[date_column] = pd.to_datetime(df[date_column], format='%Y-%m-%d')
+                    
+                    # 优化：使用numpy操作
+                    quantity_column = '数量' if is_outbound else '调拨数量'
+                    df_sum = df.groupby([date_column, '商品编码'])[quantity_column].sum()
+                    
+                    for (date, code), quantity in df_sum.items():
+                        if code in code_index_map:
+                            day = date.day
+                            column_name = f"{day}日{'出' if is_outbound else '进'}库"
                             
-                        chunk_count += 1
-                        is_outbound = '出库单号' in chunk.columns
-                        operation_type = "出库" if is_outbound else "入库"
-                        date_column = '出库日期' if is_outbound else '创建日期'
-                        
-                        if date_column not in chunk.columns:
-                            continue
-                        
-                        # 优化：减少日期转换开销
-                        chunk[date_column] = pd.to_datetime(chunk[date_column], format='%Y-%m-%d')
-                        
-                        # 优化：直接使用numpy操作
-                        quantity_column = '数量' if is_outbound else '调拨数量'
-                        df_sum = chunk.groupby([date_column, '商品编码'])[quantity_column].sum()
-                        
-                        for (date, code), quantity in df_sum.items():
-                            if code in code_index_map:
-                                day = date.day
-                                column_name = f"{day}日{'出' if is_outbound else '进'}库"
-                                
-                                # 获取或创建日期列缓存
-                                if column_name not in all_updates:
-                                    for idx, cell in enumerate(ws[1], 1):
-                                        if cell.value == column_name:
-                                            all_updates[column_name] = (get_column_letter(idx), {})
-                                            break
-                                
-                                if column_name in all_updates:
-                                    column_letter, updates_dict = all_updates[column_name]
-                                    updates_dict[code_index_map[code]] = quantity
-                        
-                        # 更新进度
-                        progress = (file_idx * 100) + (chunk_count * 100 // total_files)
-                        progress_bar['value'] = min(progress, progress_bar['maximum'])
-                        self.root.update_idletasks()
+                            # 获取或创建日期列缓存
+                            if column_name not in all_updates:
+                                for idx, cell in enumerate(ws[1], 1):
+                                    if cell.value == column_name:
+                                        all_updates[column_name] = (get_column_letter(idx), {})
+                                        break
+                            
+                            if column_name in all_updates:
+                                column_letter, updates_dict = all_updates[column_name]
+                                updates_dict[code_index_map[code]] = quantity
+                    
+                    # 更新进度
+                    progress = (file_idx * 100) + 100
+                    progress_bar['value'] = min(progress, progress_bar['maximum'])
+                    self.root.update_idletasks()
                     
                 except Exception as e:
                     self.log(f"处理文件 {file_name} 时出错: {str(e)}")
