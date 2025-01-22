@@ -186,7 +186,6 @@ class InventoryManager:
                 self.log("错误: 请添加出入库文件")
                 return
 
-            # 创建进度条窗口
             progress_window = tk.Toplevel(self.root)
             progress_window.title("处理进度")
             progress_window.geometry("300x150")
@@ -211,24 +210,25 @@ class InventoryManager:
             
             self._cancel_operation = False
 
-            # 优化：使用pandas读取库存文件的表头
+            # 读取库存文件表头
             df_header = pd.read_excel(self.inventory_file.get(), sheet_name=self.sheet_combobox.get(), nrows=1)
-            
-            # 找到所需列的索引
             code_column_idx = df_header.columns.get_loc('新商品编码') + 1
             
-            # 使用openpyxl加载工作簿
+            # 加载工作簿
             wb = load_workbook(self.inventory_file.get(), read_only=False, data_only=True)
             ws = wb[self.sheet_combobox.get()]
             
-            # 创建商品编码索引字典
+            # 建立商品编码索引
             self.log("正在建立商品编码索引...")
             code_index_map = {}
             code_column_letter = get_column_letter(code_column_idx)
             
+            # 处理商品编码，确保格式一致
             for idx, row in enumerate(ws.iter_rows(min_col=code_column_idx, max_col=code_column_idx, min_row=2), 2):
                 if row[0].value:
-                    code_index_map[str(row[0].value).strip()] = idx
+                    # 统一商品编码格式：去除空格，转为字符串
+                    code = str(row[0].value).strip()
+                    code_index_map[code] = idx
 
             total_files = self.files_listbox.size()
             progress_bar['maximum'] = total_files * 100
@@ -248,7 +248,7 @@ class InventoryManager:
                 self.log(f"\n开始处理文件: {file_name}")
                 
                 try:
-                    # 一次性读取文件，但只读取必要的列
+                    # 读取文件
                     df = pd.read_excel(
                         operation_file,
                         usecols=lambda x: x in ['出库单号', '商品编码', '数量', '出库日期', '创建日期', '调拨数量']
@@ -261,10 +261,13 @@ class InventoryManager:
                     if date_column not in df.columns:
                         continue
                     
-                    # 优化：减少日期转换开销
-                    df[date_column] = pd.to_datetime(df[date_column], format='%Y-%m-%d')
+                    # 处理日期格式 - 使用固定格式
+                    df[date_column] = pd.to_datetime(df[date_column], format='%Y/%m/%d %H:%M:%S')
                     
-                    # 优化：使用numpy操作
+                    # 处理商品编码格式
+                    df['商品编码'] = df['商品编码'].astype(str).str.strip()
+                    
+                    # 数据处理
                     quantity_column = '数量' if is_outbound else '调拨数量'
                     df_sum = df.groupby([date_column, '商品编码'])[quantity_column].sum()
                     
@@ -282,7 +285,9 @@ class InventoryManager:
                             
                             if column_name in all_updates:
                                 column_letter, updates_dict = all_updates[column_name]
-                                updates_dict[code_index_map[code]] = quantity
+                                # 累加相同商品编码的数量
+                                current_value = updates_dict.get(code_index_map[code], 0)
+                                updates_dict[code_index_map[code]] = current_value + quantity
                     
                     # 更新进度
                     progress = (file_idx * 100) + 100
@@ -292,7 +297,7 @@ class InventoryManager:
                 except Exception as e:
                     self.log(f"处理文件 {file_name} 时出错: {str(e)}")
                     continue
-            
+
             if not self._cancel_operation:
                 # 批量应用所有更新
                 self.log("\n正在更新单元格...")
