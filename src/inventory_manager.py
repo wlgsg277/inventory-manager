@@ -214,6 +214,93 @@ class InventoryManager:
             df_header = pd.read_excel(self.inventory_file.get(), sheet_name=self.sheet_combobox.get(), nrows=1)
             code_column_idx = df_header.columns.get_loc('新商品编码') + 1
             
+            # 从工作表名称中获取年月信息
+            sheet_name = self.sheet_combobox.get()
+            try:
+                sheet_date = pd.to_datetime(sheet_name.replace('年', '-').replace('月', ''))
+                target_year = sheet_date.year
+                target_month = sheet_date.month
+                
+                # 计算上个月的年月
+                if target_month == 1:
+                    prev_year = target_year - 1
+                    prev_month = 12
+                else:
+                    prev_year = target_year
+                    prev_month = target_month - 1
+                
+                prev_sheet_name = f"{prev_year}年{prev_month}月"
+            except:
+                self.log(f"警告: 无法从工作表名称 '{sheet_name}' 解析年月信息，将使用当前日期")
+                current_date = datetime.now()
+                target_year = current_date.year
+                target_month = current_date.month
+                prev_sheet_name = None
+
+            # 计算30天内的日期范围
+            current_date = datetime(target_year, target_month, 1)  # 当前月份的第一天
+            last_processed_day = 1  # 默认为1号
+            
+            # 找到当前月份最后一个有出库数据的日期
+            for idx, cell in enumerate(ws[1], 1):
+                if cell.value and '出库' in str(cell.value):
+                    try:
+                        day = int(''.join(filter(str.isdigit, str(cell.value))))
+                        last_processed_day = max(last_processed_day, day)
+                    except:
+                        continue
+            
+            current_date = datetime(target_year, target_month, last_processed_day)
+            thirty_days_ago = current_date - pd.Timedelta(days=29)  # 获取30天前的日期
+            self.log(f"计算30天出库数量：从 {thirty_days_ago.strftime('%Y年%m月%d日')} 到 {current_date.strftime('%Y年%m月%d日')}")
+
+            # 获取上月出库数据
+            prev_month_data = {}
+            if prev_sheet_name and thirty_days_ago.month != target_month:
+                try:
+                    prev_wb = load_workbook(self.inventory_file.get(), read_only=True)
+                    if prev_sheet_name in prev_wb.sheetnames:
+                        prev_ws = prev_wb[prev_sheet_name]
+                        
+                        # 找到新商品编码列和出库数据列
+                        code_col = None
+                        date_cols = {}
+                        
+                        for idx, cell in enumerate(prev_ws[1], 1):
+                            if cell.value == '新商品编码':
+                                code_col = idx
+                            elif cell.value and '出库' in str(cell.value):
+                                try:
+                                    # 从列名中提取日期
+                                    day = int(''.join(filter(str.isdigit, str(cell.value))))
+                                    # 只收集30天范围内的日期列
+                                    check_date = datetime(prev_year, prev_month, day)
+                                    if check_date >= thirty_days_ago:
+                                        date_cols[idx] = day
+                                except:
+                                    continue
+                        
+                        if code_col and date_cols:
+                            self.log(f"从上月收集 {len(date_cols)} 天的出库数据")
+                            # 读取上月数据
+                            for row in prev_ws.iter_rows(min_row=2):
+                                code = str(row[code_col-1].value).strip() if row[code_col-1].value else None
+                                if code:
+                                    # 累计该商品所有出库数量
+                                    total_out = 0
+                                    for col_idx, day in date_cols.items():
+                                        value = row[col_idx-1].value
+                                        if value and isinstance(value, (int, float)):
+                                            total_out += value
+                                    
+                                    if total_out > 0:
+                                        prev_month_data[code] = total_out
+                        
+                        prev_wb.close()
+                        self.log(f"已读取上月出库数据: {prev_sheet_name}")
+                except Exception as e:
+                    self.log(f"读取上月数据时出错: {str(e)}")
+
             # 加载工作簿，保留公式
             wb = load_workbook(self.inventory_file.get(), read_only=False, data_only=False)
             ws = wb[self.sheet_combobox.get()]
@@ -261,8 +348,27 @@ class InventoryManager:
                     if date_column not in df.columns:
                         continue
                     
-                    # 处理日期格式 - 使用固定格式
-                    df[date_column] = pd.to_datetime(df[date_column], format='%Y/%m/%d %H:%M:%S')
+                    # 修改日期格式识别 - 支持多种常见格式
+                    try:
+                        df[date_column] = pd.to_datetime(df[date_column])
+                    except:
+                        # 如果默认解析失败，尝试其他常见格式
+                        date_formats = [
+                            '%Y/%m/%d %H:%M:%S',
+                            '%Y-%m-%d %H:%M:%S',
+                            '%Y/%m/%d',
+                            '%Y-%m-%d'
+                        ]
+                        
+                        for date_format in date_formats:
+                            try:
+                                df[date_column] = pd.to_datetime(df[date_column], format=date_format)
+                                break
+                            except:
+                                continue
+                        
+                        if not pd.api.types.is_datetime64_any_dtype(df[date_column]):
+                            raise ValueError(f"无法识别日期格式: {date_column}")
                     
                     # 处理商品编码格式
                     df['商品编码'] = df['商品编码'].astype(str).str.strip()
@@ -271,21 +377,50 @@ class InventoryManager:
                     quantity_column = '数量' if is_outbound else '调拨数量'
                     df_sum = df.groupby([date_column, '商品编码'])[quantity_column].sum()
                     
+                    # 创建30天出库数量的累计字典
+                    if is_outbound and '近30天出库数量' not in all_updates:
+                        for idx, cell in enumerate(ws[1], 1):
+                            if cell.value == '近30天出库数量':
+                                # 初始化时加入上月数据
+                                column_letter = get_column_letter(idx)
+                                updates_dict = {}
+                                # 将上月数据添加到更新字典中
+                                for code, quantity in prev_month_data.items():
+                                    if code in code_index_map:
+                                        updates_dict[code_index_map[code]] = quantity
+                                all_updates['近30天出库数量'] = (column_letter, updates_dict)
+                                break
+                    
                     for (date, code), quantity in df_sum.items():
-                        if code in code_index_map:
-                            day = date.day
-                            column_name = f"{day}日{'出' if is_outbound else '进'}库"
-                            
-                            # 获取或创建日期列缓存
-                            if column_name not in all_updates:
-                                for idx, cell in enumerate(ws[1], 1):
-                                    if cell.value == column_name:
-                                        all_updates[column_name] = (get_column_letter(idx), {})
-                                        break
-                            
-                            if column_name in all_updates:
-                                column_letter, updates_dict = all_updates[column_name]
-                                # 累加相同商品编码的数量
+                        # 处理目标月份的数据
+                        if date.year == target_year and date.month == target_month:
+                            if code in code_index_map:
+                                month = date.month
+                                day = date.day
+                                column_name = f"{month}月{day}日{'出' if is_outbound else '进'}库"
+                                
+                                # 获取或创建日期列缓存
+                                if column_name not in all_updates:
+                                    found_column = False
+                                    for idx, cell in enumerate(ws[1], 1):
+                                        if cell.value == column_name:
+                                            all_updates[column_name] = (get_column_letter(idx), {})
+                                            found_column = True
+                                            break
+                                    if not found_column:
+                                        self.log(f"警告: 未找到列 '{column_name}'")
+                                        continue
+                                
+                                if column_name in all_updates:
+                                    column_letter, updates_dict = all_updates[column_name]
+                                    # 累加相同商品编码的数量
+                                    current_value = updates_dict.get(code_index_map[code], 0)
+                                    updates_dict[code_index_map[code]] = current_value + quantity
+                        
+                        # 处理近30天出库数量
+                        if is_outbound and date >= thirty_days_ago:
+                            if code in code_index_map and '近30天出库数量' in all_updates:
+                                column_letter, updates_dict = all_updates['近30天出库数量']
                                 current_value = updates_dict.get(code_index_map[code], 0)
                                 updates_dict[code_index_map[code]] = current_value + quantity
                     
